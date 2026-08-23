@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.davidkaya.omarchy-scenes",
+  "name": "Omarchy Scenes",
+  "version": "0.1.0",
+  "author": "David Kaya",
+  "license": "MIT",
+  "description": "Switch complete desktop contexts from the Omarchy bar.",
+  "kinds": [
+    "service",
+    "bar-widget",
+    "panel"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml",
+    "panel": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Scenes",
+    "description": "Shows the active scene and opens the scene switcher.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "left"
+  }
+}

@@ -18,6 +18,8 @@ Item {
     ? String(manifest.__sourceDir)
     : Quickshell.env("HOME") + "/.config/omarchy/plugins/" + pluginId
   readonly property string executable: pluginPath + "/bin/omarchy-scenes"
+  readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state"
+  readonly property string statePath: stateHome + "/omarchy-scenes/state.json"
   readonly property string activeId: String(state.active || "")
   readonly property string activeName: String(state.name || "Choose a scene")
   readonly property string activeIcon: String(state.icon || "󰒓")
@@ -31,6 +33,7 @@ Item {
       root.error = "The scenes command returned invalid data"
       return
     }
+
     if (parsed.error) {
       root.error = String(parsed.error)
       return
@@ -41,6 +44,16 @@ Item {
       root.state = parsed.state || {}
     } else if (root.operation === "apply") {
       root.state = parsed
+    }
+  }
+
+  function parseStateFile(raw) {
+    try {
+      var parsed = JSON.parse(String(raw || "").trim())
+      if (parsed && typeof parsed === "object")
+        root.state = parsed
+    } catch (exception) {
+      // The state file may not exist until the first scene is applied.
     }
   }
 
@@ -70,11 +83,21 @@ Item {
       waitForEnd: true
       onStreamFinished: root.parseOutput(text)
     }
+
     onExited: function(exitCode) {
       root.busy = false
       if (exitCode !== 0 && !root.error)
         root.error = "Scene operation failed"
     }
+  }
+
+  FileView {
+    path: root.statePath
+    watchChanges: true
+    atomicWrites: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.parseStateFile(text())
   }
 
   IpcHandler {

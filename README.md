@@ -48,7 +48,7 @@ than `id` and `name` are optional; omitted properties are left unchanged.
 | `monitors` | Hyprland monitor definitions (`name`, `mode`, `position`, `scale`, optional `transform` or `disabled`) |
 | `audio` | PipeWire device IDs, volumes from 0–100, and mute state |
 | `dnd` | Omarchy notification do-not-disturb state |
-| `powerProfile` | `powerprofilesctl` profile |
+| `powerProfile` | Omarchy AC/battery-aware power profile |
 | `nightLight` | Omarchy night-light state |
 | `theme` | Omarchy theme name |
 | `wallpaper` | Wallpaper path |
@@ -68,10 +68,12 @@ Existing matching windows are reused. Missing applications are launched
 without a shell and then moved after their Hyprland window appears. Hooks are
 also argument arrays and are never evaluated through a shell.
 
-Transitions are serialized by the shell service. Unsupported optional desktop
-capabilities produce warnings while the rest of the scene continues; a failed
-`before` or `after` hook fails the transition. State and warnings are written
-atomically to `~/.local/state/omarchy-scenes/state.json`.
+Transitions are serialized across the shell service and CLI. Unsupported
+optional desktop capabilities produce warnings while the rest of the scene
+continues; a failed `before` or `after` hook fails the transition. State and
+warnings are written atomically to
+`~/.local/state/omarchy-scenes/state.json`; the bar watches that file so CLI
+changes appear immediately.
 
 After editing the configuration, reload it with:
 

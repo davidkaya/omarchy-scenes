@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -31,6 +32,7 @@ class Action:
     label: str
     command: tuple[str, ...]
     optional: bool = True
+    stage: str = "main"
 
 
 def _string(value: Any, location: str) -> str:
@@ -94,6 +96,11 @@ def validate_config(data: Any) -> dict[str, Any]:
                     scale = monitor.get("scale", 1)
                     if not isinstance(scale, (int, float)) or scale <= 0:
                         raise ConfigError(f"{monitor_where}.scale must be positive")
+                    if "transform" in monitor and (
+                        not isinstance(monitor["transform"], int)
+                        or not 0 <= monitor["transform"] <= 7
+                    ):
+                        raise ConfigError(f"{monitor_where}.transform must be an integer from 0 to 7")
 
         if "audio" in scene:
             audio = scene["audio"]
@@ -159,26 +166,41 @@ def scene_by_id(config: dict[str, Any], scene_id: str) -> dict[str, Any]:
     raise ConfigError(f"unknown scene: {scene_id}")
 
 
-def _monitor_spec(monitor: dict[str, Any]) -> str:
+def _lua_literal(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return json.dumps(str(value))
+
+
+def _monitor_expression(monitor: dict[str, Any]) -> str:
     if monitor.get("disabled") is True:
-        return f"{monitor['name']},disable"
-    parts = [
-        monitor["name"],
-        str(monitor.get("mode", "preferred")),
-        str(monitor.get("position", "auto")),
-        str(monitor.get("scale", 1)),
-    ]
+        values = {"output": monitor["name"], "disabled": True}
+    else:
+        values = {
+            "output": monitor["name"],
+            "mode": monitor.get("mode", "preferred"),
+            "position": monitor.get("position", "auto"),
+            "scale": monitor.get("scale", 1),
+        }
     if "transform" in monitor:
-        parts.extend(["transform", str(monitor["transform"])])
-    return ",".join(parts)
+        values["transform"] = monitor["transform"]
+    fields = ", ".join(f"{key} = {_lua_literal(value)}" for key, value in values.items())
+    return f"hl.monitor({{ {fields} }})"
 
 
 def plan_scene(scene: dict[str, Any]) -> list[Action]:
     actions: list[Action] = []
     for command in scene.get("before", []):
-        actions.append(Action("before hook", tuple(command), False))
+        actions.append(Action("before hook", tuple(command), False, "before"))
     for monitor in scene.get("monitors", []):
-        actions.append(Action(f"monitor {monitor['name']}", ("hyprctl", "keyword", "monitor", _monitor_spec(monitor))))
+        actions.append(
+            Action(
+                f"monitor {monitor['name']}",
+                ("hyprctl", "eval", _monitor_expression(monitor)),
+            )
+        )
 
     audio = scene.get("audio", {})
     if "output" in audio:
@@ -201,7 +223,12 @@ def plan_scene(scene: dict[str, Any]) -> list[Action]:
     if "dnd" in scene:
         actions.append(Action("do not disturb", ("omarchy-shell", "notifications", "setDnd", str(scene["dnd"]).lower())))
     if "powerProfile" in scene:
-        actions.append(Action("power profile", ("powerprofilesctl", "set", scene["powerProfile"])))
+        actions.append(
+            Action(
+                "power profile",
+                ("omarchy-powerprofiles-set", "autodetect", scene["powerProfile"]),
+            )
+        )
     if "nightLight" in scene:
         actions.append(Action("night light", ("omarchy-shell", "nightlight", "enable" if scene["nightLight"] else "disable")))
     if "theme" in scene:
@@ -209,8 +236,32 @@ def plan_scene(scene: dict[str, Any]) -> list[Action]:
     if "wallpaper" in scene:
         actions.append(Action("wallpaper", ("omarchy-theme-bg-set", os.path.expanduser(scene["wallpaper"]))))
     for command in scene.get("after", []):
-        actions.append(Action("after hook", tuple(command), False))
+        actions.append(Action("after hook", tuple(command), False, "after"))
     return actions
+
+
+def printable_plan(scene: dict[str, Any]) -> list[dict[str, Any]]:
+    actions = plan_scene(scene)
+    result = [
+        {"label": action.label, "command": list(action.command)}
+        for action in actions
+        if action.stage != "after"
+    ]
+    result.extend(
+        {
+            "label": "application",
+            "command": app["command"],
+            "match": app["match"],
+            **({"workspace": str(app["workspace"])} if "workspace" in app else {}),
+        }
+        for app in scene.get("applications", [])
+    )
+    result.extend(
+        {"label": action.label, "command": list(action.command)}
+        for action in actions
+        if action.stage == "after"
+    )
+    return result
 
 
 def _clients() -> list[dict[str, Any]]:
@@ -242,18 +293,25 @@ def _matching_clients(app: dict[str, Any], clients: list[dict[str, Any]]) -> lis
     return found
 
 
+def _workspace_move_expression(workspace: str, address: str) -> str:
+    normalized_address = address if address.startswith("0x") else f"0x{address}"
+    return (
+        "hl.dsp.window.move({ "
+        f"workspace = {_lua_literal(workspace)}, "
+        f"window = {_lua_literal(f'address:{normalized_address}')}, "
+        "follow = false })"
+    )
+
+
 def apply_applications(
     applications: list[dict[str, Any]],
     *,
-    dry_run: bool = False,
     timeout: float = 10,
 ) -> list[str]:
     warnings: list[str] = []
     for app in applications:
         matches = _matching_clients(app, _clients())
         if not matches:
-            if dry_run:
-                continue
             try:
                 subprocess.Popen(
                     app["command"],
@@ -275,17 +333,25 @@ def apply_applications(
             warnings.append(f"application did not open: {' '.join(app['command'])}")
             continue
         workspace = app.get("workspace")
-        if workspace is not None and not dry_run:
+        if workspace is not None:
             for client in matches:
                 address = str(client.get("address", ""))
                 if not address:
                     continue
-                result = subprocess.run(
-                    ["hyprctl", "dispatch", "movetoworkspacesilent", f"{workspace},address:{address}"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
+                try:
+                    result = subprocess.run(
+                        [
+                            "hyprctl",
+                            "dispatch",
+                            _workspace_move_expression(str(workspace), address),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                except (OSError, subprocess.SubprocessError):
+                    warnings.append(f"could not move {address} to workspace {workspace}")
+                    continue
                 if result.returncode:
                     warnings.append(f"could not move {address} to workspace {workspace}")
     return warnings
@@ -325,22 +391,23 @@ def read_state(path: Path = DEFAULT_STATE) -> dict[str, Any]:
         return {}
 
 
-def apply_scene(
+def _apply_scene_unlocked(
     scene: dict[str, Any],
     *,
     runner: Callable[[Sequence[str]], tuple[int, str]] = default_runner,
     state_path: Path = DEFAULT_STATE,
-    dry_run: bool = False,
 ) -> dict[str, Any]:
-    state = {"active": read_state(state_path).get("active", ""), "phase": "applying", "target": scene["id"], "warnings": []}
-    if not dry_run:
-        write_state(state, state_path)
+    state = {
+        "active": read_state(state_path).get("active", ""),
+        "phase": "applying",
+        "target": scene["id"],
+        "warnings": [],
+    }
+    write_state(state, state_path)
 
     warnings: list[str] = []
     actions = plan_scene(scene)
-    for action in (item for item in actions if item.label != "after hook"):
-        if dry_run:
-            continue
+    for action in (item for item in actions if item.stage != "after"):
         code, detail = runner(action.command)
         if code:
             message = f"{action.label}: {detail or f'exited with {code}'}"
@@ -351,10 +418,8 @@ def apply_scene(
                 write_state(state, state_path)
                 return state
 
-    warnings.extend(apply_applications(scene.get("applications", []), dry_run=dry_run))
-    for action in (item for item in actions if item.label == "after hook"):
-        if dry_run:
-            continue
+    warnings.extend(apply_applications(scene.get("applications", [])))
+    for action in (item for item in actions if item.stage == "after"):
         code, detail = runner(action.command)
         if code:
             state.update(
@@ -372,9 +437,36 @@ def apply_scene(
         "warnings": warnings,
         "updatedAt": int(time.time()),
     }
-    if not dry_run:
-        write_state(state, state_path)
+    write_state(state, state_path)
     return state
+
+
+def apply_scene(
+    scene: dict[str, Any],
+    *,
+    runner: Callable[[Sequence[str]], tuple[int, str]] = default_runner,
+    state_path: Path = DEFAULT_STATE,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    if dry_run:
+        return {
+            "active": read_state(state_path).get("active", ""),
+            "target": scene["id"],
+            "name": scene["name"],
+            "icon": scene.get("icon", "󰒓"),
+            "phase": "dry-run",
+            "warnings": [],
+        }
+
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = state_path.with_suffix(state_path.suffix + ".lock")
+    with lock_path.open("w", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _apply_scene_unlocked(
+            scene,
+            runner=runner,
+            state_path=state_path,
+        )
 
 
 def _summary(config: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
@@ -421,11 +513,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         scene = scene_by_id(config, args.scene)
         if args.command == "plan":
-            print(json.dumps([{"label": action.label, "command": list(action.command)} for action in plan_scene(scene)], indent=2))
+            print(json.dumps(printable_plan(scene), indent=2))
             return 0
         state = apply_scene(scene, state_path=args.state, dry_run=args.dry_run)
         print(json.dumps(state))
-        return 0 if state["phase"] in ("active", "applied-with-warnings") else 1
+        return 0 if state["phase"] in ("active", "applied-with-warnings", "dry-run") else 1
     except ConfigError as error:
         print(json.dumps({"error": str(error)}))
         return 2

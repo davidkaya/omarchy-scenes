@@ -3,14 +3,17 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from omarchy_scenes import (
     ConfigError,
     apply_scene,
+    _workspace_move_expression,
     load_config,
     plan_scene,
+    printable_plan,
     read_state,
     validate_config,
 )
@@ -113,7 +116,12 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(actions[0].command, ("prepare", "--quiet"))
         self.assertEqual(
             actions[1].command,
-            ("hyprctl", "keyword", "monitor", "DP-1,2560x1440@144,0x0,1"),
+            (
+                "hyprctl",
+                "eval",
+                'hl.monitor({ output = "DP-1", mode = "2560x1440@144", '
+                'position = "0x0", scale = 1 })',
+            ),
         )
         self.assertIn(
             ("wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "35%"),
@@ -130,7 +138,40 @@ class PlanningTests(unittest.TestCase):
             {"id": "travel", "name": "Travel", "monitors": [{"name": "DP-1", "disabled": True}]}
         )
         self.assertEqual(
-            actions[0].command, ("hyprctl", "keyword", "monitor", "DP-1,disable")
+            actions[0].command,
+            (
+                "hyprctl",
+                "eval",
+                'hl.monitor({ output = "DP-1", disabled = true })',
+            ),
+        )
+
+    def test_workspace_move_uses_lua_dispatcher_and_quotes_values(self):
+        self.assertEqual(
+            _workspace_move_expression('name:dev"tools', "abc123"),
+            'hl.dsp.window.move({ workspace = "name:dev\\"tools", '
+            'window = "address:0xabc123", follow = false })',
+        )
+
+    def test_printable_plan_places_applications_before_after_hooks(self):
+        plan = printable_plan(
+            {
+                "id": "work",
+                "name": "Work",
+                "before": [["prepare"]],
+                "applications": [
+                    {
+                        "command": ["editor"],
+                        "match": {"class": "Editor"},
+                        "workspace": "2",
+                    }
+                ],
+                "after": [["notify"]],
+            }
+        )
+        self.assertEqual(
+            [item["label"] for item in plan],
+            ["before hook", "application", "after hook"],
         )
 
 
@@ -188,7 +229,7 @@ class ApplyTests(unittest.TestCase):
             self.assertEqual(
                 calls,
                 [
-                    ("powerprofilesctl", "set", "balanced"),
+                    ("omarchy-powerprofiles-set", "autodetect", "balanced"),
                     ("notify", "ready"),
                 ],
             )
@@ -197,14 +238,28 @@ class ApplyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             state_path = Path(directory) / "state.json"
             calls = []
-            state = apply_scene(
-                {"id": "work", "name": "Work", "before": [["prepare"]]},
-                runner=lambda command: calls.append(command) or (0, ""),
-                state_path=state_path,
-                dry_run=True,
-            )
-            self.assertEqual(state["phase"], "active")
+            with mock.patch("omarchy_scenes._clients") as clients:
+                state = apply_scene(
+                    {
+                        "id": "work",
+                        "name": "Work",
+                        "before": [["prepare"]],
+                        "applications": [
+                            {
+                                "command": ["editor"],
+                                "match": {"class": "Editor"},
+                            }
+                        ],
+                    },
+                    runner=lambda command: calls.append(command) or (0, ""),
+                    state_path=state_path,
+                    dry_run=True,
+                )
+            self.assertEqual(state["phase"], "dry-run")
+            self.assertEqual(state["active"], "")
+            self.assertEqual(state["target"], "work")
             self.assertEqual(calls, [])
+            clients.assert_not_called()
             self.assertFalse(state_path.exists())
 
 

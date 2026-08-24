@@ -85,6 +85,34 @@ class ValidationTests(unittest.TestCase):
             with self.assertRaisesRegex(ConfigError, "invalid JSON"):
                 load_config(path)
 
+    def test_load_migrates_legacy_default_terminal_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "scenes.json"
+            path.write_text(
+                json.dumps(
+                    config_with(
+                        {
+                            "id": "work",
+                            "name": "Work",
+                            "applications": [
+                                {
+                                    "command": ["uwsm-app", "--", "ghostty"],
+                                    "match": {"class": "com\\.mitchellh\\.ghostty"},
+                                }
+                            ],
+                        }
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_config(path)
+
+            self.assertEqual(
+                config["scenes"][0]["applications"][0]["command"],
+                ["omarchy-launch-terminal"],
+            )
+
 
 class PlanningTests(unittest.TestCase):
     def test_builds_ordered_native_commands(self):

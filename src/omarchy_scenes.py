@@ -21,6 +21,8 @@ PLUGIN_ID = "io.github.davidkaya.omarchy-scenes"
 DEFAULT_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "omarchy" / "scenes.json"
 DEFAULT_STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "omarchy-scenes" / "state.json"
 SCENE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+LEGACY_TERMINAL_COMMAND = ["uwsm-app", "--", "ghostty"]
+DEFAULT_TERMINAL_COMMAND = ["omarchy-launch-terminal"]
 
 
 class ConfigError(ValueError):
@@ -152,7 +154,12 @@ def validate_config(data: Any) -> dict[str, Any]:
 def load_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
     try:
         with path.open(encoding="utf-8") as handle:
-            return validate_config(json.load(handle))
+            config = validate_config(json.load(handle))
+        for scene in config["scenes"]:
+            for application in scene.get("applications", []):
+                if application["command"] == LEGACY_TERMINAL_COMMAND:
+                    application["command"] = DEFAULT_TERMINAL_COMMAND.copy()
+        return config
     except FileNotFoundError as error:
         raise ConfigError(f"configuration not found: {path}") from error
     except json.JSONDecodeError as error:

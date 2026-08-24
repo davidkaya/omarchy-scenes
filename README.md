@@ -58,7 +58,7 @@ Example application:
 
 ```json
 {
-  "command": ["uwsm-app", "--", "ghostty"],
+  "command": ["omarchy-launch-terminal"],
   "match": {"class": "com\\.mitchellh\\.ghostty"},
   "workspace": "1"
 }

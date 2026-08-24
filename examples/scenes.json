@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "scenes": [
+    {
+      "id": "work",
+      "name": "Work",
+      "icon": "󰢬",
+      "description": "Focused work with communications muted",
+      "dnd": true,
+      "powerProfile": "balanced",
+      "nightLight": false,
+      "audio": {
+        "outputVolume": 35,
+        "outputMuted": false
+      },
+      "applications": [
+        {
+          "command": ["uwsm-app", "--", "ghostty"],
+          "match": {"class": "com\\.mitchellh\\.ghostty"},
+          "workspace": "1"
+        }
+      ]
+    },
+    {
+      "id": "meeting",
+      "name": "Meeting",
+      "icon": "󰍫",
+      "description": "Meeting audio and notifications",
+      "dnd": true,
+      "powerProfile": "balanced",
+      "audio": {
+        "outputVolume": 45,
+        "inputVolume": 70,
+        "inputMuted": false
+      }
+    },
+    {
+      "id": "gaming",
+      "name": "Gaming",
+      "icon": "󰊴",
+      "description": "Performance mode without interruptions",
+      "dnd": true,
+      "powerProfile": "performance",
+      "nightLight": false
+    },
+    {
+      "id": "travel",
+      "name": "Travel",
+      "icon": "󰀝",
+      "description": "Battery-conscious mobile setup",
+      "dnd": false,
+      "powerProfile": "power-saver",
+      "nightLight": true
+    }
+  ]
+}

@@ -218,7 +218,7 @@ def plan_scene(scene: dict[str, Any]) -> list[Action]:
         ("inputMuted", "@DEFAULT_AUDIO_SOURCE@"),
     ):
         if key in audio:
-            actions.append(Action(key, ("wpctl", "set-mute", target, str(audio[key]).lower())))
+            actions.append(Action(key, ("wpctl", "set-mute", target, "1" if audio[key] else "0")))
 
     if "dnd" in scene:
         actions.append(Action("do not disturb", ("omarchy-shell", "notifications", "setDnd", str(scene["dnd"]).lower())))

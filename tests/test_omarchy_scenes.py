@@ -128,6 +128,10 @@ class PlanningTests(unittest.TestCase):
             [action.command for action in actions],
         )
         self.assertIn(
+            ("wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "0"),
+            [action.command for action in actions],
+        )
+        self.assertIn(
             ("omarchy-shell", "notifications", "setDnd", "true"),
             [action.command for action in actions],
         )
